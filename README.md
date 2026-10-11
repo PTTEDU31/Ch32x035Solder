@@ -2,6 +2,9 @@
 
 PlatformIO project (noneos-sdk) for the CH32X035G8U6 T12/C210 station.
 
+Branches: `main` = ST7789 240x320 portrait, `st7796-480x320` = ST7796S
+480x320 landscape (this branch).
+
 ## Status
 
 | Part | State |
@@ -100,8 +103,15 @@ the handle connector on a free ADC pin.
 
 ## Display
 
-Two styles (menu "Screen"): **Gauge** (ring, big temperature, state word)
-and **Graph** (big temperature, ~56 s history with setpoint line). Both show
+ST7796S 480x320 landscape over SPI (same pins as the ST7789: SCK PA5, MOSI
+PA7, DC PA4, RES PA3, backlight PB9; CS tied low). `LCD_MADCTL` (0x28 =
+landscape + BGR) and `LCD_INVERT` in config.h adjust rotation, colour order
+and inversion for a given module.
+
+Two styles (menu "Screen"): **Gauge** (ring with the temperature inside on
+the left, chips / SET / power cards on the right) and **Graph** (2x
+temperature, chips and SET at the top, ~114 s history with the setpoint
+line and power bar below). Both show
 tip / PD contract chips, the SET card (boost time left or minutes to
 auto-off), and a power bar with %, W (from measured current) and V_IN.
 

@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 
-#define LCD_W 240
+/* ST7796S, 480x320 landscape. */
+#define LCD_W 480
 #define LCD_H 320
 
 #define RGB(r, g, b) ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
@@ -18,6 +19,8 @@ void lcd_fill(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
 uint16_t lcd_text(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t bg, uint8_t scale);
 /* Large anti-aliased digits ('0'-'9', '-', ' '), FONT_BIG_W x FONT_BIG_H. */
 uint16_t lcd_big(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t bg);
+/* Same digits drawn at 2x (96x120 cells): no extra flash. */
+uint16_t lcd_big2(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t bg);
 /* Medium anti-aliased proportional text (FONT_MID_H high). */
 uint16_t lcd_mid(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t bg);
 uint16_t lcd_mid_width(const char *s);

@@ -1,12 +1,11 @@
 /*
- * User interface, ST7789 240x320 portrait. Two main screen styles:
+ * User interface, ST7796S 480x320 landscape. Two main screen styles:
  *
- *  GAUGE: tip / PD chips, a 270 degree ring coloured blue -> amber -> red
- *         with a setpoint tick, big anti-aliased temperature and state word,
- *         SET card, power bar with %, W and V_IN.
- *  GRAPH: same chips, big temperature on the left with the setpoint and
- *         state, a 60 s temperature history (with the setpoint line), and
- *         the power bar.
+ *  GAUGE: left: a 270 degree ring coloured blue -> amber -> red with a
+ *         setpoint tick, big temperature and state word inside. Right: tip /
+ *         PD chips, SET card, power card (bar, %, W, V_IN).
+ *  GRAPH: top: chips, 2x temperature, state and SET. Bottom: a ~2 min
+ *         temperature history with the setpoint line, and the power bar.
  *
  * Drawing is incremental (no framebuffer): every element keeps what it last
  * drew and only changed parts are sent; the ring only redraws the segments
@@ -46,25 +45,28 @@
 #define C_GREEN RGB(70, 220, 120)
 #define C_PD RGB(120, 190, 255)
 
-/* ---- layout ------------------------------------------------------------- */
-#define CHIP_Y 8
-#define CHIP_H 22
-#define RING_CX 120
-#define RING_CY 132
-#define RING_R 88
-#define RING_W 10
+/* ---- layout (480 x 320) -------------------------------------------------- */
+/* Gauge: ring on the left half, cards on the right. */
+#define RING_CX 150
+#define RING_CY 168
+#define RING_R 128
+#define RING_W 14
 #define RING_SEGS 54 /* 5 degrees each over 270 degrees */
-#define SET_Y 236
-#define SET_H 32
-#define BAR_Y 278
-#define BAR_H 10
-#define FOOT_Y 294
+#define PANEL_X 304  /* right column */
+#define PANEL_W 168
+#define CHIP_H 26
 
+/* Graph: header band, history, power bar. */
 #define GRAPH_X 8
-#define GRAPH_Y 128
-#define GRAPH_W 224
-#define GRAPH_H 92
-#define GRAPH_PTS 112 /* one point per 2 px, sampled every 0.5 s: 56 s */
+#define GRAPH_Y 158
+#define GRAPH_W 464
+#define GRAPH_H 122
+#define GRAPH_PTS 228 /* one point per 2 px, sampled every 0.5 s: ~114 s */
+#define G_BAR_Y 290
+#define G_FOOT_Y 302
+
+#define SET_H 40
+#define BAR_H 12
 
 typedef enum {
     MENU_OFF,
@@ -318,15 +320,16 @@ static const char *kind_str(pd_kind_t k)
     return n[k];
 }
 
-static void draw_chips(const heater_status_t *h)
+/* Tip chip (tw wide) and PD chip (pw wide) side by side at (x, y). */
+static void draw_chips(const heater_status_t *h, uint16_t x, uint16_t y, uint16_t tw, uint16_t pw)
 {
     char buf[24];
 
     if (full_redraw) {
-        lcd_round_rect(8, CHIP_Y, 64, CHIP_H, 10, C_CARD, C_BG);
-        lcd_round_rect(78, CHIP_Y, 154, CHIP_H, 10, C_CARD, C_BG);
+        lcd_round_rect(x, y, tw, CHIP_H, 12, C_CARD, C_BG);
+        lcd_round_rect(x + tw + 6, y, pw, CHIP_H, 12, C_CARD, C_BG);
     }
-    small_box(shown.chip_tip, sizeof(shown.chip_tip), h->tip ? h->tip->name : "--", 14, CHIP_Y + 3, 52, AL_CENTER,
+    small_box(shown.chip_tip, sizeof(shown.chip_tip), h->tip ? h->tip->name : "--", x + 6, y + 5, tw - 12, AL_CENTER,
               C_FG, C_CARD);
     if (pd_contract_mv()) {
         snprintf(buf, sizeof(buf), "%u.%uV %u.%uA%s%s", pd_contract_mv() / 1000, pd_contract_mv() % 1000 / 100,
@@ -335,7 +338,7 @@ static void draw_chips(const heater_status_t *h)
     } else {
         snprintf(buf, sizeof(buf), "%s", pd_state() == PD_NEGOTIATING ? "PD ..." : "no PD");
     }
-    small_box(shown.chip_pd, sizeof(shown.chip_pd), buf, 84, CHIP_Y + 3, 142, AL_CENTER, C_PD, C_CARD);
+    small_box(shown.chip_pd, sizeof(shown.chip_pd), buf, x + tw + 12, y + 5, pw - 12, AL_CENTER, C_PD, C_CARD);
 }
 
 /* State word and colours. */
@@ -388,7 +391,7 @@ static void state_look(const heater_status_t *h, const char **word, uint16_t *fg
     }
 }
 
-static void draw_big_temp(const heater_status_t *h, uint16_t x, uint16_t y, uint16_t fg)
+static void draw_big_temp(const heater_status_t *h, uint16_t x, uint16_t y, uint16_t fg, int twice)
 {
     char buf[8];
     int show = h->tip && h->state != HS_NO_TIP && h->state != HS_DETECT;
@@ -402,22 +405,26 @@ static void draw_big_temp(const heater_status_t *h, uint16_t x, uint16_t y, uint
     if (!full_redraw && strcmp(shown.big, buf) == 0 && shown.big_fg == fg) {
         return;
     }
-    lcd_big(x, y, buf, fg, C_BG);
+    if (twice) {
+        lcd_big2(x, y, buf, fg, C_BG);
+    } else {
+        lcd_big(x, y, buf, fg, C_BG);
+    }
     strcpy(shown.big, buf);
     shown.big_fg = fg;
 }
 
-static void draw_set_card(const heater_status_t *h, uint16_t y)
+static void draw_set_card(const heater_status_t *h, uint16_t x, uint16_t y, uint16_t w)
 {
     char buf[24], extra[16];
     int16_t set = h->state == HS_SLEEP ? h->target_c : (h->boost ? h->target_c : settings.target_c);
 
     if (full_redraw) {
-        lcd_round_rect(8, y, 224, SET_H, 12, C_CARD, C_BG);
-        lcd_text(20, y + 8, "SET", C_DIM, C_CARD, 1);
+        lcd_round_rect(x, y, w, SET_H, 14, C_CARD, C_BG);
+        lcd_text(x + 12, y + 12, "SET", C_DIM, C_CARD, 1);
     }
     snprintf(buf, sizeof(buf), "%d%s", to_unit(set), unit());
-    mid_box(shown.set, sizeof(shown.set), buf, 60, y + 5, 100, AL_CENTER, C_FG, C_CARD);
+    mid_box(shown.set, sizeof(shown.set), buf, x + 44, y + 9, w - 120, AL_LEFT, C_FG, C_CARD);
 
     extra[0] = 0;
     if (h->boost) {
@@ -425,28 +432,30 @@ static void draw_set_card(const heater_status_t *h, uint16_t y)
     } else if (h->state == HS_SLEEP && h->sleep_left_s) {
         snprintf(extra, sizeof(extra), "off %um", (h->sleep_left_s + 59) / 60);
     }
-    small_box(shown.extra, sizeof(shown.extra), extra, 160, y + 8, 64, AL_RIGHT,
+    small_box(shown.extra, sizeof(shown.extra), extra, x + w - 84, y + 12, 72, AL_RIGHT,
               h->boost ? C_RED : C_DIM, C_CARD);
 }
 
-static void draw_power(const heater_status_t *h)
+/* Power bar at (x, bar_y), width bw, on background bg; text line at foot_y. */
+static void draw_power(const heater_status_t *h, uint16_t x, uint16_t bar_y, uint16_t bw, uint16_t foot_y,
+                       uint16_t bg)
 {
-    char buf[32];
+    char buf[40];
     uint16_t vin = (uint16_t)vin_mv();
-    uint16_t w = (uint16_t)(224UL * h->power_pct / 100);
+    uint16_t w = (uint16_t)((uint32_t)bw * h->power_pct / 100);
     uint16_t col = heat_color((uint16_t)(h->power_pct * 255 / 100));
 
     if (full_redraw || w != shown.bar_px || col != shown.bar_color) {
-        lcd_round_rect(8, BAR_Y, 224, BAR_H, 5, C_TRACK, C_BG);
-        if (w >= 10) {
-            lcd_round_rect(8, BAR_Y, w, BAR_H, 5, col, C_TRACK);
+        lcd_round_rect(x, bar_y, bw, BAR_H, 6, C_TRACK, bg);
+        if (w >= 12) {
+            lcd_round_rect(x, bar_y, w, BAR_H, 6, col, C_TRACK);
         }
         shown.bar_px = w;
         shown.bar_color = col;
     }
-    snprintf(buf, sizeof(buf), "%3u%%   %3u.%uW   %2u.%uV", h->power_pct, h->watts_x10 / 10, h->watts_x10 % 10,
+    snprintf(buf, sizeof(buf), "%3u%%  %3u.%uW  %2u.%uV", h->power_pct, h->watts_x10 / 10, h->watts_x10 % 10,
              vin / 1000, vin % 1000 / 100);
-    small_box(shown.foot, sizeof(shown.foot), buf, 8, FOOT_Y, 224, AL_CENTER, C_FG, C_BG);
+    small_box(shown.foot, sizeof(shown.foot), buf, x, foot_y, bw, AL_CENTER, C_FG, bg);
 }
 
 static void draw_gauge(const heater_status_t *h)
@@ -456,13 +465,27 @@ static void draw_gauge(const heater_status_t *h)
     int16_t ring_t = (h->tip && h->state != HS_NO_TIP && h->state != HS_DETECT) ? h->temp_c : 0;
 
     state_look(h, &word, &fg, &solid);
-    draw_chips(h);
     draw_ring(ring_t, h->state == HS_SLEEP ? h->target_c : settings.target_c, solid);
-    /* Big digits: white when ready, otherwise the state colour. */
-    draw_big_temp(h, RING_CX - 3 * FONT_BIG_W / 2, RING_CY - 40, fg == C_GREEN ? C_FG : fg);
-    mid_box(shown.word, sizeof(shown.word), word, RING_CX - 60, RING_CY + 26, 120, AL_CENTER, fg, C_BG);
-    draw_set_card(h, SET_Y);
-    draw_power(h);
+    /* Big digits inside the ring: white when ready, else the state colour. */
+    draw_big_temp(h, RING_CX - 3 * FONT_BIG_W / 2, RING_CY - 46, fg == C_GREEN ? C_FG : fg, 0);
+    if (full_redraw) {
+        lcd_mid(RING_CX + 3 * FONT_BIG_W / 2 + 2, RING_CY - 44, unit(), C_DIM, C_BG);
+    }
+    mid_box(shown.word, sizeof(shown.word), word, RING_CX - 80, RING_CY + 30, 160, AL_CENTER, fg, C_BG);
+
+    /* Right column. */
+    draw_chips(h, PANEL_X, 12, 56, PANEL_W - 62);
+    draw_set_card(h, PANEL_X, 60, PANEL_W);
+    if (full_redraw) {
+        lcd_round_rect(PANEL_X, 116, PANEL_W, 84, 14, C_CARD, C_BG);
+        lcd_text(PANEL_X + 12, 126, "POWER", C_DIM, C_CARD, 1);
+    }
+    draw_power(h, PANEL_X + 12, 152, PANEL_W - 24, 174, C_CARD);
+    if (full_redraw) {
+        lcd_text(PANEL_X, 270, "turn: set", C_FAINT, C_BG, 1);
+        lcd_text(PANEL_X, 286, "click: boost", C_FAINT, C_BG, 1);
+        lcd_text(PANEL_X, 302, "hold: menu", C_FAINT, C_BG, 1);
+    }
 }
 
 static void draw_graph_screen(const heater_status_t *h)
@@ -471,12 +494,15 @@ static void draw_graph_screen(const heater_status_t *h)
     uint16_t fg, solid;
 
     state_look(h, &word, &fg, &solid);
-    draw_chips(h);
-    draw_big_temp(h, 8, 44, fg == C_GREEN ? C_FG : fg);
+    /* Header: 2x temperature on the left (3 x 96 px), cards on the right. */
+    draw_big_temp(h, 8, 12, fg == C_GREEN ? C_FG : fg, 1);
     if (full_redraw) {
-        lcd_mid(160, 46, unit(), C_DIM, C_BG);
+        /* Unit under the right end of the digits (the chips are to the right). */
+        lcd_mid(8 + 3 * FONT_BIG_W * 2 - 34, 134, unit(), C_DIM, C_BG);
     }
-    mid_box(shown.word, sizeof(shown.word), word, 160, 76, 76, AL_LEFT, fg, C_BG);
+    draw_chips(h, PANEL_X, 12, 56, PANEL_W - 62);
+    mid_box(shown.word, sizeof(shown.word), word, PANEL_X, 50, PANEL_W, AL_LEFT, fg, C_BG);
+    draw_set_card(h, PANEL_X, 84, PANEL_W);
     if (full_redraw || millis() - last_graph >= 500) {
         last_graph = millis();
         if (h->tip && h->state != HS_NO_TIP && h->state != HS_DETECT) {
@@ -484,8 +510,7 @@ static void draw_graph_screen(const heater_status_t *h)
         }
         draw_graph(h->state == HS_SLEEP ? h->target_c : settings.target_c);
     }
-    draw_set_card(h, SET_Y);
-    draw_power(h);
+    draw_power(h, 8, G_BAR_Y, 300, G_FOOT_Y, C_BG);
 }
 
 /* ---- menu --------------------------------------------------------------- */
@@ -628,24 +653,25 @@ static void draw_menu(void)
 
     if (full_redraw) {
         lcd_fill(0, 0, LCD_W, LCD_H, C_BG);
-        lcd_mid(16, 14, "Settings", C_PD, C_BG);
-        lcd_round_rect(8, 96, 224, 120, 14, C_CARD, C_BG);
-        lcd_text(16, 292, "turn: change  click: next", C_FAINT, C_BG, 1);
-        lcd_text(16, 304, "hold: exit", C_FAINT, C_BG, 1);
+        lcd_mid(24, 18, "Settings", C_PD, C_BG);
+        lcd_round_rect(16, 70, LCD_W - 32, 150, 18, C_CARD, C_BG);
+        lcd_text(24, 296, "turn: change   click: next   hold: exit", C_FAINT, C_BG, 1);
         memset(&shown, 0, sizeof(shown));
+        snprintf(pos, sizeof(pos), "%u / %u", menu, MENU_COUNT - 1);
+        lcd_text(LCD_W - 24 - 8 * (uint16_t)strlen(pos), 22, pos, C_DIM, C_BG, 1);
+        /* Progress dots. */
+        for (uint8_t i = 1; i < MENU_COUNT; i++) {
+            uint16_t dx = (uint16_t)(LCD_W / 2 - (MENU_COUNT - 1) * 9 + (i - 1) * 18);
+            lcd_round_rect(dx, 240, 10, 10, 5, i == menu ? C_PD : C_TRACK, C_BG);
+        }
     }
-    if (full_redraw) {
-        snprintf(pos, sizeof(pos), "%u/%u", menu, MENU_COUNT - 1);
-        lcd_text(200, 18, pos, C_DIM, C_BG, 1);
-    }
-    mid_box(shown.m_name, sizeof(shown.m_name), menu_name(menu), 24, 116, 192, AL_LEFT, C_DIM, C_CARD);
+    mid_box(shown.m_name, sizeof(shown.m_name), menu_name(menu), 40, 96, LCD_W - 80, AL_LEFT, C_DIM, C_CARD);
     menu_value(menu, buf, sizeof(buf));
-    mid_box(shown.m_val, sizeof(shown.m_val), buf, 24, 160, 192, AL_LEFT, C_FG, C_CARD);
+    mid_box(shown.m_val, sizeof(shown.m_val), buf, 40, 150, LCD_W - 80, AL_LEFT, C_FG, C_CARD);
     /* Help text only on the calibration item; the area is already clear
      * after a full redraw (each item change is one). */
     if (full_redraw && menu == MENU_CAL) {
-        lcd_text(16, 228, "reading + offset = real tip", C_DIM, C_BG, 1);
-        lcd_text(16, 244, "temperature (tip thermometer)", C_DIM, C_BG, 1);
+        lcd_text(40, 262, "reading + offset = real tip temperature", C_DIM, C_BG, 1);
     }
 }
 

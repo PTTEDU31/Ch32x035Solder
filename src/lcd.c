@@ -1,5 +1,6 @@
 /*
- * ST7789 240x320 over SPI1 (PA5 SCK, PA7 MOSI), DC on PA4, RES on PA3, no CS.
+ * ST7796S 480x320 landscape over SPI1 (PA5 SCK, PA7 MOSI), DC on PA4, RES on
+ * PA3, no CS (CS tied low on the module).
  * Modules without CS need SPI mode 3. No framebuffer: everything is drawn
  * directly, in strips, calling the yield hook between strips.
  *
@@ -183,8 +184,8 @@ void lcd_init(lcd_yield_fn y)
     RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
     SPI_I2S_DMACmd(SPI1, SPI_I2S_DMAReq_Tx, ENABLE);
 
-    /* Hardware reset, then the usual ST7789 sequence. Delays are split so
-     * PD keeps running. */
+    /* Hardware reset, then the ST7796S sequence (as used by TFT_eSPI).
+     * Delays are split so PD keeps running. */
     GPIO_SetBits(GPIOA, LCD_DC_PIN);
     GPIO_ResetBits(GPIOA, LCD_RES_PIN);
     for (int i = 0; i < 10; i++) {
@@ -196,38 +197,63 @@ void lcd_init(lcd_yield_fn y)
         delay_ms(1);
         yield();
     }
+    cmd(0x01); /* software reset */
+    for (int i = 0; i < 120; i++) {
+        delay_ms(1);
+        yield();
+    }
     cmd(0x11); /* sleep out */
     for (int i = 0; i < 120; i++) {
         delay_ms(1);
         yield();
     }
-    cmd(0x36); /* MADCTL: portrait, RGB */
-    data(0x00);
+    cmd(0xF0); /* command set control: enable extension part I */
+    data(0xC3);
+    cmd(0xF0); /* part II */
+    data(0x96);
+    cmd(0x36); /* MADCTL */
+    data(LCD_MADCTL);
     cmd(0x3A); /* 16 bpp */
     data(0x55);
-    cmd(0xB2); /* porch */
-    data(0x0C);
-    data(0x0C);
-    data(0x00);
-    data(0x33);
-    data(0x33);
-    cmd(0xB7);
-    data(0x35);
-    cmd(0xBB);
-    data(0x19);
-    cmd(0xC0);
-    data(0x2C);
-    cmd(0xC2);
+    cmd(0xB4); /* 1-dot inversion */
     data(0x01);
-    cmd(0xC3);
-    data(0x12);
-    cmd(0xC4);
-    data(0x20);
-    cmd(0xC6); /* 60 Hz */
-    data(0x0F);
-    cmd(0xD0);
-    data(0xA4);
-    data(0xA1);
+    cmd(0xB6); /* display function control */
+    data(0x80);
+    data(0x02);
+    data(0x3B);
+    cmd(0xE8); /* display output ctrl adjust */
+    data(0x40);
+    data(0x8A);
+    data(0x00);
+    data(0x00);
+    data(0x29);
+    data(0x19);
+    data(0xA5);
+    data(0x33);
+    cmd(0xC1); /* power control 2 */
+    data(0x06);
+    cmd(0xC2); /* power control 3 */
+    data(0xA7);
+    cmd(0xC5); /* VCOM */
+    data(0x18);
+    {
+        static const uint8_t gp[14] = {0xF0, 0x09, 0x0B, 0x06, 0x04, 0x15, 0x2F,
+                                       0x54, 0x42, 0x3C, 0x17, 0x14, 0x18, 0x1B};
+        static const uint8_t gn[14] = {0xE0, 0x09, 0x0B, 0x06, 0x04, 0x03, 0x2B,
+                                       0x43, 0x42, 0x3B, 0x16, 0x14, 0x17, 0x1B};
+        cmd(0xE0); /* positive gamma */
+        for (int i = 0; i < 14; i++) {
+            data(gp[i]);
+        }
+        cmd(0xE1); /* negative gamma */
+        for (int i = 0; i < 14; i++) {
+            data(gn[i]);
+        }
+    }
+    cmd(0xF0); /* disable extension part I */
+    data(0x3C);
+    cmd(0xF0); /* part II */
+    data(0x69);
     cmd(LCD_INVERT ? 0x21 : 0x20);
     cmd(0x13); /* normal display */
     lcd_fill(0, 0, LCD_W, LCD_H, 0);
@@ -351,6 +377,52 @@ uint16_t lcd_big(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t bg
         }
         yield();
         x += FONT_BIG_W;
+    }
+    spi_done();
+    return x;
+}
+
+uint16_t lcd_big2(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t bg)
+{
+    uint16_t pal[16];
+    const uint16_t rb = FONT_BIG_W / 2; /* bytes per glyph row */
+
+    palette(pal, fg, bg);
+    for (; *s; s++) {
+        int idx;
+        if (*s >= '0' && *s <= '9') {
+            idx = *s - '0';
+        } else if (*s == '-') {
+            idx = FONT_BIG_DASH;
+        } else {
+            lcd_fill(x, y, FONT_BIG_W * 2, FONT_BIG_H * 2, bg);
+            x += FONT_BIG_W * 2;
+            continue;
+        }
+        {
+            const uint8_t *g = &font_big[idx * rb * FONT_BIG_H];
+            window(x, y, FONT_BIG_W * 2, FONT_BIG_H * 2);
+            for (uint16_t row = 0; row < FONT_BIG_H; row++) {
+                const uint8_t *r = &g[row * rb];
+                for (uint8_t rep = 0; rep < 2; rep++) {
+                    /* Horizontal 2x with the in-between pixel interpolated
+                     * for a smoother edge. */
+                    for (uint16_t i = 0; i < rb; i++) {
+                        uint8_t a = r[i] >> 4, b = r[i] & 0x0F;
+                        uint8_t n = i + 1 < rb ? (r[i + 1] >> 4) : b;
+                        px(pal[a]);
+                        px(pal[(a + b) >> 1]);
+                        px(pal[b]);
+                        px(pal[(b + n) >> 1]);
+                    }
+                }
+                if ((row & 3) == 3) {
+                    yield(); /* window stays open across the pause */
+                }
+            }
+        }
+        yield();
+        x += FONT_BIG_W * 2;
     }
     spi_done();
     return x;
