@@ -80,9 +80,9 @@
 #define LCD_DC_PIN GPIO_Pin_4  /* PA4 */
 #define LCD_SCK_PIN GPIO_Pin_5 /* PA5, SPI1 SCK */
 #define LCD_SDA_PIN GPIO_Pin_7 /* PA7, SPI1 MOSI */
-/* ST7796S 480x320 landscape. Most ST7796 modules are not IPS: inversion
- * off; set to 1 if colours come out inverted. */
-#define LCD_INVERT 0
+/* ST7796S 480x320 landscape. This module needs display inversion on
+ * (with 0 the dark background showed up white). */
+#define LCD_INVERT 1
 /* MADCTL: MV (row/column exchange) for landscape | BGR. Try 0xE8 (MY|MX|MV)
  * to rotate 180 degrees, or drop 0x08 if red and blue are swapped. */
 #define LCD_MADCTL 0x28

@@ -65,7 +65,7 @@
 #define G_BAR_Y 290
 #define G_FOOT_Y 302
 
-#define SET_H 40
+#define SET_H 52
 #define BAR_H 12
 
 typedef enum {
@@ -213,11 +213,13 @@ static int16_t icos(int16_t deg)
  * is drawn as short radial strokes at 1 degree steps. */
 static void ring_segment(uint8_t i, uint16_t color)
 {
-    for (int16_t a = 135 + i * 5; a < 140 + i * 5; a++) {
-        /* Finer angle: interpolate the 5 degree table. */
-        int16_t a0 = a - a % 5, f = a % 5;
-        int32_t c = (icos(a0) * (5 - f) + icos(a0 + 5) * f) / 5;
-        int32_t s = (isin(a0) * (5 - f) + isin(a0 + 5) * f) / 5;
+    int16_t a0 = 135 + i * 5;
+
+    /* Half-degree steps (10 per segment): at r = 135 one step is ~1.2 px,
+     * so the 2 px wide strokes leave no gaps. */
+    for (int16_t k = 0; k < 10; k++) {
+        int32_t c = (icos(a0) * (10 - k) + icos(a0 + 5) * k) / 10;
+        int32_t s = (isin(a0) * (10 - k) + isin(a0 + 5) * k) / 10;
         for (int16_t r = RING_R - RING_W / 2; r <= RING_R + RING_W / 2; r++) {
             int16_t x = (int16_t)(RING_CX + c * r / 256);
             int16_t y = (int16_t)(RING_CY + s * r / 256);
@@ -421,10 +423,10 @@ static void draw_set_card(const heater_status_t *h, uint16_t x, uint16_t y, uint
 
     if (full_redraw) {
         lcd_round_rect(x, y, w, SET_H, 14, C_CARD, C_BG);
-        lcd_text(x + 12, y + 12, "SET", C_DIM, C_CARD, 1);
+        lcd_text(x + 12, y + 6, "SET", C_DIM, C_CARD, 1);
     }
     snprintf(buf, sizeof(buf), "%d%s", to_unit(set), unit());
-    mid_box(shown.set, sizeof(shown.set), buf, x + 44, y + 9, w - 120, AL_LEFT, C_FG, C_CARD);
+    mid_box(shown.set, sizeof(shown.set), buf, x + 12, y + 24, w - 24, AL_LEFT, C_FG, C_CARD);
 
     extra[0] = 0;
     if (h->boost) {
@@ -432,7 +434,7 @@ static void draw_set_card(const heater_status_t *h, uint16_t x, uint16_t y, uint
     } else if (h->state == HS_SLEEP && h->sleep_left_s) {
         snprintf(extra, sizeof(extra), "off %um", (h->sleep_left_s + 59) / 60);
     }
-    small_box(shown.extra, sizeof(shown.extra), extra, x + w - 84, y + 12, 72, AL_RIGHT,
+    small_box(shown.extra, sizeof(shown.extra), extra, x + 48, y + 6, w - 60, AL_RIGHT,
               h->boost ? C_RED : C_DIM, C_CARD);
 }
 
@@ -477,10 +479,10 @@ static void draw_gauge(const heater_status_t *h)
     draw_chips(h, PANEL_X, 12, 56, PANEL_W - 62);
     draw_set_card(h, PANEL_X, 60, PANEL_W);
     if (full_redraw) {
-        lcd_round_rect(PANEL_X, 116, PANEL_W, 84, 14, C_CARD, C_BG);
-        lcd_text(PANEL_X + 12, 126, "POWER", C_DIM, C_CARD, 1);
+        lcd_round_rect(PANEL_X, 124, PANEL_W, 84, 14, C_CARD, C_BG);
+        lcd_text(PANEL_X + 12, 132, "POWER", C_DIM, C_CARD, 1);
     }
-    draw_power(h, PANEL_X + 12, 152, PANEL_W - 24, 174, C_CARD);
+    draw_power(h, PANEL_X + 12, 158, PANEL_W - 24, 180, C_CARD);
     if (full_redraw) {
         lcd_text(PANEL_X, 270, "turn: set", C_FAINT, C_BG, 1);
         lcd_text(PANEL_X, 286, "click: boost", C_FAINT, C_BG, 1);
