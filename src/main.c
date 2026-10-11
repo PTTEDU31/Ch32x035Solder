@@ -93,6 +93,9 @@ int main(void)
     heater_init();
     heater_set_target(settings.target_c);
     heater_set_sleep_target(settings.sleep_c);
+#ifdef UI_STYLE_FORCE
+    settings.ui_style = UI_STYLE_FORCE; /* bench: pick a screen without the knob */
+#endif
     heater_set_auto_off(settings.off_min);
     heater_set_sleep_stages((uint16_t)settings.sleep1_min * 60, settings.deep_c);
     heater_set_fast_wake(settings.fast_wake);

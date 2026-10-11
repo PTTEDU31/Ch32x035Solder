@@ -110,7 +110,6 @@ static struct {
 } shown;
 
 static uint8_t graph_t[GRAPH_PTS]; /* temperature / 2, 0 = no data */
-static uint8_t graph_n;
 
 /* ---- helpers ------------------------------------------------------------ */
 static int16_t to_unit(int16_t c)
@@ -309,47 +308,81 @@ static void draw_ring(int16_t temp_c, int16_t set_c, uint16_t solid)
 }
 
 /* ---- graph -------------------------------------------------------------- */
-static void graph_push(int16_t c)
-{
-    uint8_t v = (uint8_t)(c < 0 ? 0 : c > 508 ? 254 : c / 2);
+/* History as a ring buffer drawn left to right like a sweeping scope:
+ * each 0.5 s sample redraws only its own 2 px column plus the next column
+ * (cleared, as a moving gap), instead of scrolling the whole graph. A full
+ * redraw paints every column once. Each column is one DMA window. */
+static uint16_t graph_head; /* column of the next sample */
 
-    if (v == 0) {
-        v = 1;
+static void graph_column(uint16_t i, uint16_t set_row, int blank)
+{
+    const uint16_t top = GRAPH_Y + 3, hin = GRAPH_H - 6;
+    uint16_t x = (uint16_t)(GRAPH_X + 4 + i * 2);
+    uint16_t lvl = 0, col = C_CARD, fade = C_CARD;
+    int has = !blank && graph_t[i] != 0;
+
+    if (has) {
+        int16_t c = (int16_t)graph_t[i] * 2;
+        lvl = (uint16_t)((uint32_t)(c > 50 ? c - 50 : 0) * (hin - 1) / 400);
+        if (lvl > hin - 2) {
+            lvl = hin - 2;
+        }
+        col = heat_color(temp_frac(c));
+        fade = lcd_mix(col, C_CARD, 5);
     }
-    if (graph_n < GRAPH_PTS) {
-        graph_t[graph_n++] = v;
-    } else {
-        memmove(graph_t, graph_t + 1, GRAPH_PTS - 1);
-        graph_t[GRAPH_PTS - 1] = v;
+    lcd_begin(x, top, 2, hin);
+    for (uint16_t r = 0; r < hin; r++) {
+        uint16_t up = (uint16_t)(hin - 1 - r); /* rows from the bottom */
+        uint16_t c = C_CARD;
+        if (has) {
+            if (up < lvl) {
+                c = fade;
+            } else if (up < lvl + 2) {
+                c = col;
+            }
+        }
+        for (uint8_t k = 0; k < 2; k++) {
+            uint16_t p = c;
+            if (r == set_row && ((x + k - GRAPH_X) % 6) < 3) {
+                p = C_FG;
+            }
+            lcd_push(p);
+        }
+    }
+    lcd_end();
+}
+
+static uint16_t graph_set_row(int16_t set_c)
+{
+    const uint16_t hin = GRAPH_H - 6;
+    int32_t sb = (int32_t)(set_c > 50 ? set_c - 50 : 0) * (hin - 1) / 400;
+    return (uint16_t)(hin - 1 - (sb > hin - 1 ? hin - 1 : sb));
+}
+
+/* Full paint (card + all columns). */
+static void draw_graph(int16_t set_c)
+{
+    uint16_t set_row = graph_set_row(set_c);
+
+    lcd_round_rect(GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H, 8, C_CARD, C_BG);
+    for (uint16_t i = 0; i < GRAPH_PTS; i++) {
+        graph_column(i, set_row, i == graph_head);
+        if ((i & 7) == 7) {
+            lcd_yield();
+        }
     }
 }
 
-static void draw_graph(int16_t set_c)
+/* New sample: store it at the head, draw it, clear the next column. */
+static void graph_add(int16_t c, int16_t set_c)
 {
-    /* Scale: 50 .. 450 C onto the graph height. */
-    uint16_t set_y = (uint16_t)(GRAPH_Y + GRAPH_H - 1 - (uint32_t)(set_c > 50 ? set_c - 50 : 0) * (GRAPH_H - 1) / 400);
+    uint16_t set_row = graph_set_row(set_c);
+    uint8_t v = (uint8_t)(c < 2 ? 1 : c > 508 ? 254 : c / 2);
 
-    lcd_round_rect(GRAPH_X, GRAPH_Y, GRAPH_W, GRAPH_H, 8, C_CARD, C_BG);
-    for (uint8_t i = 0; i < graph_n; i++) {
-        int16_t c = (int16_t)graph_t[i] * 2;
-        uint16_t h = (uint16_t)((uint32_t)(c > 50 ? c - 50 : 0) * (GRAPH_H - 1) / 400);
-        uint16_t x = (uint16_t)(GRAPH_X + 4 + i * 2);
-        uint16_t col = heat_color(temp_frac(c));
-        if (x + 1 >= GRAPH_X + GRAPH_W - 4) {
-            break;
-        }
-        if (h > GRAPH_H - 6) {
-            h = GRAPH_H - 6;
-        }
-        /* Filled area, faded, with a bright top line. */
-        lcd_vline(x, GRAPH_Y + GRAPH_H - 3 - h, h, lcd_mix(col, C_CARD, 5));
-        lcd_vline(x + 1, GRAPH_Y + GRAPH_H - 3 - h, h, lcd_mix(col, C_CARD, 5));
-        lcd_fill(x, GRAPH_Y + GRAPH_H - 4 - h, 2, 2, col);
-    }
-    /* Setpoint line, dashed. */
-    for (uint16_t x = GRAPH_X + 4; x < GRAPH_X + GRAPH_W - 4; x += 6) {
-        lcd_fill(x, set_y, 3, 1, C_FG);
-    }
+    graph_t[graph_head] = v;
+    graph_column(graph_head, set_row, 0);
+    graph_head = (uint16_t)((graph_head + 1) % GRAPH_PTS);
+    graph_column(graph_head, set_row, 1);
 }
 
 /* ---- main screen -------------------------------------------------------- */
@@ -549,13 +582,20 @@ static void draw_graph_screen(const heater_status_t *h)
     draw_chips(h, PANEL_X, 12, 56, PANEL_W - 62);
     mid_box(shown.word, sizeof(shown.word), word, PANEL_X, 50, PANEL_W, AL_LEFT, fg, C_BG);
     draw_set_card(h, PANEL_X, 84, PANEL_W);
-    if (full_redraw || millis() - last_graph >= 500) {
-        last_graph = millis();
-        if (h->tip && h->state != HS_NO_TIP && h->state != HS_DETECT) {
-            graph_push(h->temp_c);
-        }
+    {
+        static int16_t graph_set;
+        int16_t set_c = h->state == HS_SLEEP ? h->target_c : settings.target_c;
         ui_stage = 10;
-        draw_graph(h->state == HS_SLEEP ? h->target_c : settings.target_c);
+        if (full_redraw || set_c != graph_set) {
+            graph_set = set_c; /* setpoint line moved: repaint */
+            draw_graph(set_c);
+        }
+        if (millis() - last_graph >= 500) {
+            last_graph = millis();
+            if (h->tip && h->state != HS_NO_TIP && h->state != HS_DETECT) {
+                graph_add(h->temp_c, set_c);
+            }
+        }
     }
     ui_stage = 6;
     draw_power(h, 8, G_BAR_Y, 300, G_FOOT_Y, C_BG);
