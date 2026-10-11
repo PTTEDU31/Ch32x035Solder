@@ -112,10 +112,14 @@
 /* Presence probe at 5 V: clearly above the offset (~0.4 A). The bootstrap
  * only gives Vgs ~4.5 V at 5 V, so the probe current is below V/R. */
 #define CUR_PRESENT_RAW 25
-/* Hard current limit, checked every 1 ms while the heater is on. The
- * effective limit is the lower of this, the tip's limit and the PD
- * contract current (+10 %). Tripping latches FAULT_OVERCURRENT. */
+/* Current limiting, checked every 1 ms while the heater is on:
+ * - soft limit = lower of the tip limit and the PD contract current: a
+ *   pulse that exceeds it is cut short (no error), the control loop then
+ *   lowers the voltage and the duty so the current stays below it;
+ * - hard limit = soft x CUR_SHORT_PCT % or CUR_HARD_MAX_MA: only a short
+ *   circuit gets there; it latches FAULT_OVERCURRENT. */
 #define CUR_HARD_MAX_MA 6000
+#define CUR_SHORT_PCT 150
 
 /* Tip ID (PC3): ~0.6 V = T12, 3.3 V (open) = C210. Thresholds sit halfway
  * between the levels so divider tolerance and noise do not matter:

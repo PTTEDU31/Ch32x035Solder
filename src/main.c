@@ -50,11 +50,12 @@ static void status_line(void)
     }
     next = millis() + 1000;
     h = heater_status();
-    printf("%lu %s %s %s T=%d/%d P=%u%% I=%lumA V=%u pd=%u/%u%s st=%u f=%02x isr=%luus gap=%lums\r\n",
+    printf("%lu %s %s %s T=%d/%d P=%u%% I=%lumA V=%u pd=%u/%u%s st=%u f=%02x isr=%luus gap=%lums cut=%u pk=%lu\r\n",
            (unsigned long)millis(), heater_state_name(h->state), h->tip ? h->tip->name : "-", heater_err_name(h->err),
            h->temp_c, h->target_c, h->power_pct, (unsigned long)CUR_MA(sense.cur_raw), sense.vin_mv,
            pd_contract_mv(), pd_contract_ma(), pd_epr_active() ? " EPR" : "", sense.stand, sense.faults,
-           (unsigned long)(isr_max_cycles() / 48), (unsigned long)bg_gap_max);
+           (unsigned long)(isr_max_cycles() / 48), (unsigned long)bg_gap_max, sense.cur_cut,
+           (unsigned long)CUR_MA(sense.cur_peak));
     bg_gap_max = 0;
 }
 #endif

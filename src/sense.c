@@ -23,7 +23,7 @@ static volatile uint16_t win_min_mv, win_max_mv, temp_max;
 static volatile uint8_t id_expect;
 static volatile uint8_t probe_req, probe_done;
 static volatile uint16_t probe_raw;
-static volatile uint16_t cur_limit_raw = 0xFFFF;
+static volatile uint16_t cur_soft_raw = 0xFFFF, cur_hard_raw = 0xFFFF;
 
 static uint16_t ma_to_raw(uint32_t ma)
 {
@@ -77,7 +77,7 @@ void sense_init(void)
 {
     sense.id_class = ID_CLASS_UNKNOWN;
     id_pending = ID_CLASS_UNKNOWN;
-    cur_limit_raw = ma_to_raw(CUR_HARD_MAX_MA);
+    cur_soft_raw = cur_hard_raw = ma_to_raw(CUR_HARD_MAX_MA);
     sense.temp_raw = 4095;
     ready = 1;
 }
@@ -152,8 +152,11 @@ void sense_tick(void)
                 probe_raw = c;
             }
         }
-        if (c > cur_limit_raw) {
-            sense.faults |= FAULT_OVERCURRENT;
+        if (c > cur_hard_raw) {
+            sense.faults |= FAULT_OVERCURRENT; /* short circuit */
+            off();
+        } else if (c > cur_soft_raw && !probing) {
+            sense.cur_cut++; /* end this pulse; the loop backs off */
             off();
         }
     }
@@ -228,10 +231,16 @@ void sense_set_permit(int p, uint16_t vin_min_mv, uint16_t vin_max_mv, uint16_t 
 
 void sense_set_current_limit(uint16_t max_ma)
 {
-    if (max_ma > CUR_HARD_MAX_MA) {
-        max_ma = CUR_HARD_MAX_MA;
+    uint32_t hard = (uint32_t)max_ma * CUR_SHORT_PCT / 100;
+
+    if (hard > CUR_HARD_MAX_MA) {
+        hard = CUR_HARD_MAX_MA;
     }
-    cur_limit_raw = ma_to_raw(max_ma);
+    if (max_ma > hard) {
+        max_ma = (uint16_t)hard;
+    }
+    cur_soft_raw = ma_to_raw(max_ma);
+    cur_hard_raw = ma_to_raw(hard);
 }
 
 void sense_suspend(int on)

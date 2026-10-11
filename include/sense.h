@@ -40,6 +40,7 @@ typedef struct {
     volatile uint32_t cycle;     /* increments at each TEMP sample */
     volatile uint16_t probe_cur;  /* shunt reading of the last presence probe */
     volatile uint16_t cur_peak;   /* highest shunt reading in the last on window */
+    volatile uint16_t cur_cut;    /* pulses cut short by the soft limit (wraps) */
     volatile uint16_t probe_count;
 } sense_t;
 
@@ -53,7 +54,8 @@ void sense_set_on_ms(uint8_t on_ms);
 /* Interlocks checked before every on pulse. permit = 0 forces off. */
 void sense_set_permit(int permit, uint16_t vin_min_mv, uint16_t vin_max_mv, uint16_t temp_max_raw,
                       uint8_t id_class);
-/* Current limit in mA, checked every 1 ms while the heater is on. */
+/* Soft current limit in mA (pulse cut short); the hard trip is at
+ * CUR_SHORT_PCT % of it, at most CUR_HARD_MAX_MA. */
 void sense_set_current_limit(uint16_t max_ma);
 /* Force the heater off immediately and keep it off until resumed. */
 void sense_suspend(int on);

@@ -65,6 +65,18 @@ static uint8_t fast_wake_en = 1;
 static uint32_t wake_until;
 static volatile uint8_t wake_req;
 static uint8_t wake_volts;
+/* Current limiting by control (not by stopping):
+ * r_meas: heater resistance measured from V_IN and the on-window current
+ * (it rises ~1.5x from cold to hot); the requested voltage keeps
+ * V / R below the limit. v_cap: extra cap lowered after a cut pulse. */
+static uint16_t r_meas_mohm;
+static uint16_t v_cap_mv = 0xFFFF;
+static uint16_t cut_seen;
+static uint16_t cur_limit_ma(const tip_t *t)
+{
+    uint32_t lim = t->max_ma, pd = pd_contract_ma();
+    return (uint16_t)(pd && pd < lim ? pd : lim);
+}
 #define WAKE_V_MIN_GAP_C 60
 
 static void set_state(heater_state_t s)
@@ -97,6 +109,8 @@ static void fail(heater_err_t e)
 
 static void go_no_tip(void)
 {
+    r_meas_mohm = 0;
+    v_cap_mv = 0xFFFF;
     stop();
     st.tip = NULL;
     pd_request(5000, 0);
@@ -131,6 +145,21 @@ static uint16_t tip_mv(const tip_t *t, int boost)
     if (FIRST_HEAT && mv > FIRST_HEAT_MAX_MV) {
         mv = FIRST_HEAT_MAX_MV;
     }
+    /* Peak current I = V / R must stay under the limit (95 %): with the
+     * measured resistance, or the nominal one until measured. */
+    {
+        uint32_t r = r_meas_mohm ? r_meas_mohm : t->r_mohm;
+        uint32_t vmax = (uint32_t)t->max_ma * 95 / 100 * r / 1000;
+        if (mv > vmax) {
+            mv = vmax;
+        }
+        if (mv > v_cap_mv) {
+            mv = v_cap_mv;
+        }
+        if (mv < HEATER_MIN_RUN_MV) {
+            mv = HEATER_MIN_RUN_MV;
+        }
+    }
     return (uint16_t)mv;
 }
 
@@ -160,13 +189,8 @@ static void apply_permit(const tip_t *t, int run)
     }
     sense_set_permit(run, (uint16_t)lo, (uint16_t)hi, tip_c_to_raw(t, TEMP_HARD_MAX_C), t->id_class);
     {
-        /* Lowest of: tip limit, PD contract + 10 %, hard limit. */
-        uint32_t lim = t->max_ma;
-        uint32_t pd_ma = (uint32_t)pd_contract_ma() * 110 / 100;
-        if (pd_ma && pd_ma < lim) {
-            lim = pd_ma;
-        }
-        sense_set_current_limit((uint16_t)lim);
+        /* Soft limit = lower of the tip limit and the PD contract. */
+        sense_set_current_limit(cur_limit_ma(t));
     }
 }
 
@@ -202,9 +226,37 @@ static void control(void)
     uint32_t max_w = t->max_w + (wake_until ? WAKE_W_EXTRA : 0);
     int waking = wake_until != 0;
 
+    /* Measured resistance from this cycle's on-window current (filtered). */
+    {
+        uint32_t ma = CUR_MA(sense.cur_raw);
+        if (ma > 300 && vin > 4000) {
+            uint32_t r = vin * 1000 / ma;
+            r_meas_mohm = r_meas_mohm ? (uint16_t)((r_meas_mohm * 3 + r) / 4) : (uint16_t)r;
+        }
+    }
+    /* A pulse was cut by the soft limit: lower the voltage cap one step
+     * (renegotiated by tip_mv), and keep going. */
+    if (sense.cur_cut != cut_seen) {
+        cut_seen = sense.cur_cut;
+        uint32_t c = pd_contract_mv();
+        v_cap_mv = (uint16_t)(c > 1000 ? c - 1000 : c);
+    }
+    /* Average current <= limit: when V / R is above it, cap the duty. */
+    if (r_meas_mohm && vin > 1000) {
+        uint32_t ipk = vin * 1000 / r_meas_mohm;
+        uint32_t lim = cur_limit_ma(t);
+        if (ipk > lim) {
+            uint32_t cap = lim * HEATER_PERIOD_MS / ipk;
+            if (cap < max_on) {
+                max_on = cap;
+            }
+        }
+    }
+
     /* Power cap: duty <= P_max * R / V^2. */
     if (vin > 1000) {
-        uint32_t cap = max_w * t->r_mohm / 1000 * HEATER_PERIOD_MS * 1000 / (vin * vin / 1000);
+        uint32_t cap = max_w * (r_meas_mohm ? r_meas_mohm : t->r_mohm) / 1000 * HEATER_PERIOD_MS * 1000 /
+                       (vin * vin / 1000);
         if (cap < max_on) {
             max_on = cap;
         }
