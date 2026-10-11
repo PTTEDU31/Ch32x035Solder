@@ -1,0 +1,14 @@
+CompileFlags:
+  # Clang does not support WCH's custom ISA extension; use the base ISA
+  # for editor analysis while PlatformIO keeps the actual firmware flags.
+  Remove: [-march=*, -msave-restore]
+  Add:
+    - --target=riscv32-unknown-elf
+    - -march=rv32imac
+    - -isystem
+    - /home/phamtung/.platformio/packages/toolchain-riscv/riscv-wch-elf/include
+    - -Wno-ignored-attributes
+    - -D__riscv
+Diagnostics:
+  Suppress:
+    - "*-Wunknown-attributes"
