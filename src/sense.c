@@ -162,10 +162,6 @@ void sense_tick(void)
         off();
     }
 
-    if (phase < HEATER_SETTLE_MS && !heater_on) {
-        sense.t_early[phase] = adc_read(ADC_CH_TEMP);
-    }
-
     if (phase == HEATER_SETTLE_MS) {
         uint8_t on_ms = req_on_ms;
 

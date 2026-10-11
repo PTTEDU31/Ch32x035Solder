@@ -6,6 +6,7 @@
 #include "config.h"
 
 #define LONG_MS 800
+#define VLONG_MS 3000
 #define DOUBLE_MS 300
 #define DEBOUNCE_MS 20
 
@@ -15,7 +16,7 @@ static volatile uint32_t activity;
 
 static uint8_t ab_last;
 static int8_t sub;
-static uint8_t sw_cnt, sw_down, long_sent, clicks;
+static uint8_t sw_cnt, sw_down, vlong_sent, clicks;
 static uint16_t sw_ms, gap_ms;
 
 /* Gray code transition table: index = old << 2 | new. */
@@ -60,11 +61,16 @@ void input_tick(void)
     if (!sw_down && sw_cnt == DEBOUNCE_MS) {
         sw_down = 1;
         sw_ms = 0;
-        long_sent = 0;
+        vlong_sent = 0;
         activity = now;
     } else if (sw_down && sw_cnt == 0) {
         sw_down = 0;
-        if (!long_sent) {
+        if (vlong_sent) {
+            /* already reported while held */
+        } else if (sw_ms >= LONG_MS) {
+            clicks = 0;
+            key = KEY_LONG;
+        } else {
             clicks++;
             gap_ms = 0;
         }
@@ -74,10 +80,10 @@ void input_tick(void)
         if (sw_ms < 0xFFFF) {
             sw_ms++;
         }
-        if (!long_sent && sw_ms >= LONG_MS) {
-            long_sent = 1;
+        if (!vlong_sent && sw_ms >= VLONG_MS) {
+            vlong_sent = 1;
             clicks = 0;
-            key = KEY_LONG;
+            key = KEY_VLONG;
         }
     } else if (clicks) {
         if (++gap_ms >= DOUBLE_MS || clicks >= 2) {

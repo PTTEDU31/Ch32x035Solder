@@ -353,6 +353,7 @@ void heater_poll(void)
 
     switch (st.state) {
     case HS_NO_TIP:
+        /* (HS_OFF is left only through its own case.) */
         /* The ID pin says which tip; the TC must also read (closed and not
          * saturated) before any power is applied. */
         if (!tc_open && id != ID_CLASS_UNKNOWN && tip_for_id(id)) {
@@ -456,6 +457,7 @@ void heater_poll(void)
             /* Left on the stand: switch off, back to 5 V. */
             stop();
             pd_request(5000, 0);
+            st.off_manual = 0;
             set_state(HS_OFF);
             break;
         }
@@ -477,8 +479,9 @@ void heater_poll(void)
         break;
 
     case HS_OFF:
-        /* Lifting the iron, the knob, or a different tip starts over. */
-        if (!STAND() || wake_req || id != st.tip->id_class) {
+        /* Knob, a different tip, or (after auto-off) lifting starts over. */
+        if (wake_req || (!st.off_manual && !STAND()) || (st.tip && id != st.tip->id_class)) {
+            st.off_manual = 0;
             go_no_tip();
         }
         break;
@@ -518,6 +521,17 @@ void heater_set_sleep_stages(uint16_t stage1_s, int16_t c)
 void heater_set_fast_wake(uint8_t enable)
 {
     fast_wake_en = enable;
+}
+
+void heater_power_off(void)
+{
+    stop();
+    pd_request(5000, 0);
+    wake_req = 0;
+    wake_until = 0;
+    boost_until = 0;
+    st.off_manual = 1;
+    set_state(HS_OFF);
 }
 
 void heater_wake(void)

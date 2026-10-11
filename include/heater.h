@@ -11,7 +11,7 @@ typedef enum {
     HS_NEGOTIATE, /* tip known, waiting for its PD contract */
     HS_RUN,       /* controlling temperature */
     HS_SLEEP,     /* on stand: holds the sleep temperature */
-    HS_OFF,       /* on the stand too long: heater off until lifted */
+    HS_OFF,       /* heater off: auto-off on the stand, or held knob */
     HS_ERROR,     /* latched until the tip is removed */
 } heater_state_t;
 
@@ -40,6 +40,7 @@ typedef struct {
     uint8_t deep_sleep;   /* second sleep stage */
     uint16_t boost_left_s;
     uint16_t sleep_left_s; /* until auto-off, 0 if off disabled */
+    uint8_t off_manual;   /* HS_OFF entered with the knob (lifting does not wake) */
 } heater_status_t;
 
 void heater_init(void);
@@ -55,6 +56,8 @@ void heater_set_sleep_stages(uint16_t stage1_s, int16_t deep_c);
 void heater_set_fast_wake(uint8_t enable);
 /* Knob activity: wakes from sleep/off like lifting the iron. */
 void heater_wake(void);
+/* Switch the heater off now (held knob). Only the knob wakes it again. */
+void heater_power_off(void);
 /* Minutes on the stand before the heater switches off, 0 = never. */
 void heater_set_auto_off(uint16_t minutes);
 /* Boost: raises the target by boost_c for boost_s seconds and allows the

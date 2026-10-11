@@ -17,7 +17,7 @@
 #include "pd_sink.h"
 #include "sense.h"
 
-#define MAGIC 0x53543032UL /* "ST02" */
+#define MAGIC 0x53543033UL /* "ST03" */
 #define SETTINGS_IDLE_MS 3000
 #define PD_QUIET_WINDOW_MS 150 /* write within this time after a PD message */
 
@@ -48,6 +48,7 @@ static const settings_t defaults = {
     .sleep1_min = 3,
     .sleep_c = 200,
     .deep_c = 150,
+    .off_screen = 1,
 };
 
 static uint32_t crc32(const void *data, uint32_t len)
@@ -109,6 +110,9 @@ static void sanitize(settings_t *s)
     }
     if (s->cal_c210 < -50 || s->cal_c210 > 50) {
         s->cal_c210 = 0;
+    }
+    if (s->off_screen > 3) {
+        s->off_screen = 1;
     }
 }
 

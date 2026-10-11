@@ -18,6 +18,9 @@ typedef struct {
     int16_t deep_c;      /* deep sleep temperature */
     int8_t cal_t12;      /* tip offsets, C, added to the reading */
     int8_t cal_c210;
+    uint8_t off_screen;  /* OFF display: 0 blank, 1 clock, 2 uptime, 3 work time */
+    uint8_t reserved;
+    uint32_t work_s;     /* total heating time, seconds */
 } settings_t;
 
 extern settings_t settings;

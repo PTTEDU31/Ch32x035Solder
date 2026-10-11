@@ -6,7 +6,8 @@
 typedef enum {
     KEY_NONE,
     KEY_SHORT,
-    KEY_LONG,  /* held >= 800 ms, reported once while still held */
+    KEY_LONG,  /* released after being held 0.8 .. 3 s */
+    KEY_VLONG, /* held >= 3 s, reported once while still held */
     KEY_DOUBLE,
 } ui_key_t;
 

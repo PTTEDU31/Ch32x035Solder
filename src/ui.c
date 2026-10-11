@@ -82,10 +82,37 @@ typedef enum {
     MENU_BL,
     MENU_BEEP,
     MENU_UNIT,
+    MENU_OFF_SCREEN,
+    MENU_CLOCK_H,
+    MENU_CLOCK_M,
     MENU_COUNT
 } menu_t;
 
-volatile unsigned char ui_stage;
+/* ---- clock / counters --------------------------------------------------- */
+/* Wall clock: set in the menu, runs from millis() (internal RC, a few s per
+ * day), lost on power-down. clock_base_s = seconds of day at clock_ref_ms. */
+static uint32_t clock_base_s, clock_ref_ms;
+static uint8_t clock_set;
+static uint32_t work_ms_acc;   /* heating time not yet folded into settings */
+static uint32_t work_last_ms;
+static uint8_t off_drawn;      /* OFF screen currently shown */
+
+static uint32_t clock_now_s(void)
+{
+    return (clock_base_s + (millis() - clock_ref_ms) / 1000) % 86400UL;
+}
+
+static void clock_adjust(int32_t delta_s)
+{
+    int32_t t = (int32_t)clock_now_s() + delta_s;
+    while (t < 0) {
+        t += 86400;
+    }
+    clock_base_s = (uint32_t)t % 86400UL;
+    clock_ref_ms = millis();
+    clock_set = 1;
+}
+
 static menu_t menu;
 static uint8_t full_redraw = 1;
 static uint32_t last_draw, last_graph;
@@ -537,29 +564,22 @@ static void draw_gauge(const heater_status_t *h)
     int16_t ring_t = (h->tip && h->state != HS_NO_TIP && h->state != HS_DETECT) ? h->temp_c : 0;
 
     state_look(h, &word, &fg, &solid);
-    ui_stage = 2;
     draw_ring(ring_t, h->state == HS_SLEEP ? h->target_c : settings.target_c, solid);
-    ui_stage = 3;
     /* Big digits inside the ring: white when ready, else the state colour. */
     draw_big_temp(h, RING_CX - 3 * FONT_BIG_W / 2, RING_CY - 46, fg == C_GREEN ? C_FG : fg, 0);
     if (full_redraw) {
         lcd_mid(RING_CX + 3 * FONT_BIG_W / 2 + 2, RING_CY - 44, unit(), C_DIM, C_BG);
     }
-    ui_stage = 4;
     mid_box(shown.word, sizeof(shown.word), word, RING_CX - 80, RING_CY + 30, 160, AL_CENTER, fg, C_BG);
 
     /* Right column. */
-    ui_stage = 1;
     draw_chips(h, PANEL_X, 12, 56, PANEL_W - 62);
-    ui_stage = 5;
     draw_set_card(h, PANEL_X, 60, PANEL_W);
-    ui_stage = 6;
     if (full_redraw) {
         lcd_round_rect(PANEL_X, 124, PANEL_W, 84, 14, C_CARD, C_BG);
         lcd_text(PANEL_X + 12, 132, "POWER", C_DIM, C_CARD, 1);
     }
     draw_power(h, PANEL_X + 12, 158, PANEL_W - 24, 180, C_CARD);
-    ui_stage = 7;
     if (full_redraw) {
         lcd_text(PANEL_X, 270, "turn: set", C_FAINT, C_BG, 1);
         lcd_text(PANEL_X, 286, "click: boost", C_FAINT, C_BG, 1);
@@ -585,7 +605,6 @@ static void draw_graph_screen(const heater_status_t *h)
     {
         static int16_t graph_set;
         int16_t set_c = h->state == HS_SLEEP ? h->target_c : settings.target_c;
-        ui_stage = 10;
         if (full_redraw || set_c != graph_set) {
             graph_set = set_c; /* setpoint line moved: repaint */
             draw_graph(set_c);
@@ -597,8 +616,95 @@ static void draw_graph_screen(const heater_status_t *h)
             }
         }
     }
-    ui_stage = 6;
     draw_power(h, 8, G_BAR_Y, 300, G_FOOT_Y, C_BG);
+}
+
+/* ---- OFF screen ------------------------------------------------------- */
+static void fmt_hm(char *buf, size_t len, uint32_t s)
+{
+    snprintf(buf, len, "%02lu:%02lu", (unsigned long)(s / 3600 % 100), (unsigned long)(s / 60 % 60));
+}
+
+/* Digits "hh:mm" drawn with the big font; the colon as two dots. */
+static void draw_big_hm(const char *hm, uint16_t y, uint16_t fg)
+{
+    char hh[3] = {hm[0], hm[1], 0}, mm[3] = {hm[3], hm[4], 0};
+    uint16_t w = 4 * FONT_BIG_W * 2 + 32, x = (LCD_W - w) / 2;
+
+    if (!full_redraw && strcmp(shown.big, hm) == 0) {
+        return;
+    }
+    lcd_big2(x, y, hh, fg, C_BG);
+    if (full_redraw) {
+        lcd_round_rect(x + 4 * FONT_BIG_W + 10, y + 34, 12, 12, 6, fg, C_BG);
+        lcd_round_rect(x + 4 * FONT_BIG_W + 10, y + 74, 12, 12, 6, fg, C_BG);
+    }
+    lcd_big2(x + 4 * FONT_BIG_W + 32, y, mm, fg, C_BG);
+    strcpy(shown.big, hm);
+}
+
+static void draw_off(const heater_status_t *h)
+{
+    char buf[24], line[40];
+    uint32_t v = 0;
+    const char *label = "";
+
+    if (settings.off_screen == 0) {
+        /* Blank: backlight off, nothing to draw. */
+        if (full_redraw) {
+            backlight_set(0);
+        }
+        return;
+    }
+    if (full_redraw) {
+        backlight_set(settings.backlight > 30 ? 30 : settings.backlight);
+    }
+    switch (settings.off_screen) {
+    case 1:
+        v = clock_now_s();
+        label = clock_set ? "" : "set clock in menu";
+        break;
+    case 2:
+        v = millis() / 1000;
+        label = "on time";
+        break;
+    default:
+        v = settings.work_s + work_ms_acc / 1000;
+        label = "work time";
+        break;
+    }
+    fmt_hm(buf, sizeof(buf), v);
+    draw_big_hm(buf, 70, C_DIM);
+    mid_box(shown.word, sizeof(shown.word), label, 0, 200, LCD_W, AL_CENTER, C_FAINT, C_BG);
+
+    /* Tip temperature while it cools, so a hot tip is visible. */
+    if (h->tip && h->temp_c > 50) {
+        snprintf(line, sizeof(line), "%s  %d%s", h->tip->name, to_unit(h->temp_c), unit());
+    } else {
+        snprintf(line, sizeof(line), "OFF");
+    }
+    mid_box(shown.set, sizeof(shown.set), line, 0, 250, LCD_W, AL_CENTER,
+            h->tip && h->temp_c > 50 ? C_AMBER : C_FAINT, C_BG);
+    if (full_redraw) {
+        lcd_text((LCD_W - 26 * 8) / 2, 300, "turn or click to wake up", C_FAINT, C_BG, 1);
+    }
+}
+
+/* Heating time: counted while the heater runs, folded into flash settings
+ * every 10 minutes (one write). */
+static void work_tick(const heater_status_t *h)
+{
+    uint32_t now = millis();
+
+    if (h->state == HS_RUN && work_last_ms) {
+        work_ms_acc += now - work_last_ms;
+    }
+    work_last_ms = now;
+    if (work_ms_acc >= 600000UL) {
+        settings.work_s += work_ms_acc / 1000;
+        work_ms_acc %= 1000;
+        settings_touch();
+    }
 }
 
 /* ---- menu --------------------------------------------------------------- */
@@ -606,7 +712,8 @@ static const char *menu_name(menu_t m)
 {
     static const char *const n[] = {"",           "Screen",    "Sleep temp", "Sleep time", "Deep sleep",
                                     "Auto off",   "Fast wake", "Boost +",    "Boost time", "Tip offset",
-                                    "Backlight",  "Beep",      "Unit"};
+                                    "Backlight",  "Beep",      "Unit",       "Off screen", "Clock hour",
+                                    "Clock min"};
     return n[m];
 }
 
@@ -665,6 +772,17 @@ static void menu_value(menu_t m, char *buf, size_t len)
     case MENU_UNIT:
         snprintf(buf, len, "%s", settings.fahrenheit ? FONT_MID_DEG "F" : FONT_MID_DEG "C");
         break;
+    case MENU_OFF_SCREEN: {
+        static const char *const n[] = {"Blank", "Clock", "On time", "Work time"};
+        snprintf(buf, len, "%s", n[settings.off_screen]);
+        break;
+    }
+    case MENU_CLOCK_H:
+    case MENU_CLOCK_M: {
+        uint32_t t = clock_now_s();
+        snprintf(buf, len, "%02lu:%02lu", (unsigned long)(t / 3600), (unsigned long)(t / 60 % 60));
+        break;
+    }
     default:
         buf[0] = 0;
         break;
@@ -728,6 +846,18 @@ static void menu_adjust(menu_t m, int16_t d)
     case MENU_UNIT:
         settings.fahrenheit = !settings.fahrenheit;
         break;
+    case MENU_OFF_SCREEN:
+        settings.off_screen = (uint8_t)((settings.off_screen + 4 + (d > 0 ? 1 : -1)) % 4);
+        break;
+    case MENU_CLOCK_H:
+        clock_adjust((int32_t)d * 3600);
+        return; /* not stored in flash */
+    case MENU_CLOCK_M: {
+        /* Minutes only; seconds restart at 0 when the minute is set. */
+        uint32_t t = clock_now_s();
+        clock_adjust((int32_t)d * 60 - (int32_t)(t % 60));
+        return;
+    }
     default:
         break;
     }
@@ -740,6 +870,8 @@ static void draw_menu(void)
     char buf[24], pos[12];
 
     if (full_redraw) {
+        backlight_set(settings.backlight);
+        off_drawn = 0;
         lcd_fill(0, 0, LCD_W, LCD_H, C_BG);
         lcd_mid(24, 18, "Settings", C_PD, C_BG);
         lcd_round_rect(16, 70, LCD_W - 32, 150, 18, C_CARD, C_BG);
@@ -777,9 +909,18 @@ static void handle_input(void)
     ui_key_t k = input_take_key();
 
     if (menu == MENU_OFF) {
+        if (heater_status()->state == HS_OFF) {
+            /* Any turn or click wakes; a hold is ignored (it may be the end
+             * of the 3 s hold that switched off). */
+            if (d || k == KEY_SHORT || k == KEY_DOUBLE) {
+                click();
+                heater_wake();
+            }
+            return;
+        }
         if (d) {
             const heater_status_t *h = heater_status();
-            if (h->state == HS_SLEEP || h->state == HS_OFF) {
+            if (h->state == HS_SLEEP) {
                 heater_wake(); /* first turn only wakes */
             } else {
                 settings.target_c = (int16_t)clampi(settings.target_c + d * 5, 100, 450);
@@ -790,7 +931,7 @@ static void handle_input(void)
         if (k == KEY_SHORT) {
             const heater_status_t *h = heater_status();
             click();
-            if (h->state == HS_SLEEP || h->state == HS_OFF) {
+            if (h->state == HS_SLEEP) {
                 heater_wake();
             } else {
                 heater_boost(settings.boost_c, h->boost ? 0 : settings.boost_s);
@@ -799,6 +940,11 @@ static void handle_input(void)
             click();
             menu = MENU_STYLE;
             full_redraw = 1;
+        } else if (k == KEY_VLONG) {
+            if (settings.beep) {
+                beep(120);
+            }
+            heater_power_off();
         }
     } else {
         if (d) {
@@ -811,7 +957,7 @@ static void handle_input(void)
                 menu = MENU_OFF;
             }
             full_redraw = 1;
-        } else if (k == KEY_DOUBLE || k == KEY_LONG) {
+        } else if (k == KEY_DOUBLE || k == KEY_LONG || k == KEY_VLONG) {
             click();
             menu = MENU_OFF;
             full_redraw = 1;
@@ -843,23 +989,31 @@ void ui_poll(void)
         full_redraw = 1;
     }
     h = heater_status();
-    ui_stage = 9;
+    work_tick(h);
+    if (menu == MENU_OFF && (h->state == HS_OFF) != off_drawn) {
+        /* Entering or leaving the OFF screen. */
+        off_drawn = h->state == HS_OFF;
+        full_redraw = 1;
+        if (!off_drawn) {
+            backlight_set(settings.backlight);
+        }
+    }
     if (menu == MENU_OFF) {
         if (full_redraw) {
             lcd_fill(0, 0, LCD_W, LCD_H, C_BG);
             memset(&shown, 0, sizeof(shown));
             shown.tick_seg = -1;
         }
-        if (settings.ui_style) {
+        if (off_drawn) {
+            draw_off(h);
+        } else if (settings.ui_style) {
             draw_graph_screen(h);
         } else {
             draw_gauge(h);
         }
     } else {
-        ui_stage = 8;
         draw_menu();
     }
-    ui_stage = 0;
     drawn_menu = menu;
     drawn_style = settings.ui_style;
     full_redraw = 0;

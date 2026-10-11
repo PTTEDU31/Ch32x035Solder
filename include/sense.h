@@ -38,7 +38,6 @@ typedef struct {
     volatile uint8_t stand;      /* debounced, 1 = on stand */
     volatile uint8_t faults;
     volatile uint32_t cycle;     /* increments at each TEMP sample */
-    volatile uint16_t t_early[HEATER_SETTLE_MS]; /* TEMP 1..n ms into the off window (settle check) */
     volatile uint16_t probe_cur;  /* shunt reading of the last presence probe */
     volatile uint16_t cur_peak;   /* highest shunt reading in the last on window */
     volatile uint16_t probe_count;
