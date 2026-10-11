@@ -85,6 +85,7 @@ typedef enum {
     MENU_COUNT
 } menu_t;
 
+volatile unsigned char ui_stage;
 static menu_t menu;
 static uint8_t full_redraw = 1;
 static uint32_t last_draw, last_graph;
@@ -209,25 +210,50 @@ static int16_t icos(int16_t deg)
     return isin(deg + 90);
 }
 
-/* Segment i covers 135 + 5i .. 140 + 5i degrees (screen y points down). Each
- * is drawn as short radial strokes at 1 degree steps. */
+/* Segment i covers 135 + 5i .. 140 + 5i degrees (screen y points down).
+ * Drawn as one window over its bounding box, streamed by DMA: every pixel
+ * is classified by radius (annulus or background) and by which side of the
+ * two boundary rays it lies on (this segment or a neighbour, painted with
+ * the neighbour's current colour). One segment is ~400 pixels and a single
+ * window, instead of ~300 one-pixel windows. */
 static void ring_segment(uint8_t i, uint16_t color)
 {
-    int16_t a0 = 135 + i * 5;
+    const int32_t rin = RING_R - RING_W / 2, rout = RING_R + RING_W / 2;
+    int16_t a0 = (int16_t)(135 + i * 5), a1 = (int16_t)(a0 + 5);
+    int32_t c0 = icos(a0), s0 = isin(a0), c1 = icos(a1), s1 = isin(a1);
+    int32_t xs[4] = {c0 * rin / 256, c0 * rout / 256, c1 * rin / 256, c1 * rout / 256};
+    int32_t ys[4] = {s0 * rin / 256, s0 * rout / 256, s1 * rin / 256, s1 * rout / 256};
+    int32_t x0 = xs[0], x1 = xs[0], y0 = ys[0], y1 = ys[0];
+    uint16_t before = i > 0 ? shown.seg[i - 1] : C_BG;
+    uint16_t after = i + 1 < RING_SEGS ? shown.seg[i + 1] : C_BG;
 
-    /* Half-degree steps (10 per segment): at r = 135 one step is ~1.2 px,
-     * so the 2 px wide strokes leave no gaps. */
-    for (int16_t k = 0; k < 10; k++) {
-        int32_t c = (icos(a0) * (10 - k) + icos(a0 + 5) * k) / 10;
-        int32_t s = (isin(a0) * (10 - k) + isin(a0 + 5) * k) / 10;
-        for (int16_t r = RING_R - RING_W / 2; r <= RING_R + RING_W / 2; r++) {
-            int16_t x = (int16_t)(RING_CX + c * r / 256);
-            int16_t y = (int16_t)(RING_CY + s * r / 256);
-            lcd_pixel((uint16_t)x, (uint16_t)y, color);
-            lcd_pixel((uint16_t)x + 1, (uint16_t)y, color);
-        }
-        lcd_yield();
+    for (int k = 1; k < 4; k++) {
+        x0 = xs[k] < x0 ? xs[k] : x0;
+        x1 = xs[k] > x1 ? xs[k] : x1;
+        y0 = ys[k] < y0 ? ys[k] : y0;
+        y1 = ys[k] > y1 ? ys[k] : y1;
     }
+    x0 -= 2, y0 -= 2, x1 += 2, y1 += 2; /* arc bulge and rounding */
+
+    lcd_begin((uint16_t)(RING_CX + x0), (uint16_t)(RING_CY + y0), (uint16_t)(x1 - x0 + 1), (uint16_t)(y1 - y0 + 1));
+    for (int32_t dy = y0; dy <= y1; dy++) {
+        for (int32_t dx = x0; dx <= x1; dx++) {
+            int32_t d2 = dx * dx + dy * dy;
+            uint16_t c = C_BG;
+            if (d2 >= rin * rin && d2 <= rout * rout) {
+                if (c0 * dy - s0 * dx < 0) {
+                    c = before; /* before ray a0 */
+                } else if (c1 * dy - s1 * dx >= 0) {
+                    c = after; /* past ray a1 */
+                } else {
+                    c = color;
+                }
+            }
+            lcd_push(c);
+        }
+    }
+    lcd_end();
+    lcd_yield();
 }
 
 static void ring_tick(int16_t seg, uint16_t color)
@@ -243,6 +269,9 @@ static void ring_tick(int16_t seg, uint16_t color)
         lcd_pixel((uint16_t)x, (uint16_t)y, color);
         lcd_pixel((uint16_t)x + 1, (uint16_t)y, color);
         lcd_pixel((uint16_t)x, (uint16_t)y + 1, color);
+        if ((r & 7) == 0) {
+            lcd_yield();
+        }
     }
 }
 
@@ -251,13 +280,21 @@ static void draw_ring(int16_t temp_c, int16_t set_c, uint16_t solid)
     uint16_t lit = (uint16_t)(temp_frac(temp_c) * RING_SEGS / 255);
     int16_t tick = (int16_t)(temp_frac(set_c) * (RING_SEGS - 1) / 255);
 
+    uint8_t tick_hit = 0;
+
     for (uint8_t i = 0; i < RING_SEGS; i++) {
         uint16_t c = i < lit ? (solid ? solid : heat_color((uint16_t)(i * 255 / (RING_SEGS - 1)))) : C_TRACK;
         if (full_redraw || shown.seg[i] != c) {
             ring_segment(i, c);
             shown.seg[i] = c;
-            lcd_yield();
+            /* The segment box covers the tick's middle part. */
+            if (shown.tick_seg >= 0 && i + 1 >= shown.tick_seg && i <= shown.tick_seg + 1) {
+                tick_hit = 1;
+            }
         }
+    }
+    if (tick_hit && shown.tick_seg == tick && !full_redraw) {
+        ring_tick(tick, C_FG);
     }
     if (full_redraw || shown.tick_seg != tick) {
         if (shown.tick_seg >= 0 && !full_redraw) {
@@ -467,22 +504,29 @@ static void draw_gauge(const heater_status_t *h)
     int16_t ring_t = (h->tip && h->state != HS_NO_TIP && h->state != HS_DETECT) ? h->temp_c : 0;
 
     state_look(h, &word, &fg, &solid);
+    ui_stage = 2;
     draw_ring(ring_t, h->state == HS_SLEEP ? h->target_c : settings.target_c, solid);
+    ui_stage = 3;
     /* Big digits inside the ring: white when ready, else the state colour. */
     draw_big_temp(h, RING_CX - 3 * FONT_BIG_W / 2, RING_CY - 46, fg == C_GREEN ? C_FG : fg, 0);
     if (full_redraw) {
         lcd_mid(RING_CX + 3 * FONT_BIG_W / 2 + 2, RING_CY - 44, unit(), C_DIM, C_BG);
     }
+    ui_stage = 4;
     mid_box(shown.word, sizeof(shown.word), word, RING_CX - 80, RING_CY + 30, 160, AL_CENTER, fg, C_BG);
 
     /* Right column. */
+    ui_stage = 1;
     draw_chips(h, PANEL_X, 12, 56, PANEL_W - 62);
+    ui_stage = 5;
     draw_set_card(h, PANEL_X, 60, PANEL_W);
+    ui_stage = 6;
     if (full_redraw) {
         lcd_round_rect(PANEL_X, 124, PANEL_W, 84, 14, C_CARD, C_BG);
         lcd_text(PANEL_X + 12, 132, "POWER", C_DIM, C_CARD, 1);
     }
     draw_power(h, PANEL_X + 12, 158, PANEL_W - 24, 180, C_CARD);
+    ui_stage = 7;
     if (full_redraw) {
         lcd_text(PANEL_X, 270, "turn: set", C_FAINT, C_BG, 1);
         lcd_text(PANEL_X, 286, "click: boost", C_FAINT, C_BG, 1);
@@ -510,8 +554,10 @@ static void draw_graph_screen(const heater_status_t *h)
         if (h->tip && h->state != HS_NO_TIP && h->state != HS_DETECT) {
             graph_push(h->temp_c);
         }
+        ui_stage = 10;
         draw_graph(h->state == HS_SLEEP ? h->target_c : settings.target_c);
     }
+    ui_stage = 6;
     draw_power(h, 8, G_BAR_Y, 300, G_FOOT_Y, C_BG);
 }
 
@@ -757,6 +803,7 @@ void ui_poll(void)
         full_redraw = 1;
     }
     h = heater_status();
+    ui_stage = 9;
     if (menu == MENU_OFF) {
         if (full_redraw) {
             lcd_fill(0, 0, LCD_W, LCD_H, C_BG);
@@ -769,8 +816,10 @@ void ui_poll(void)
             draw_gauge(h);
         }
     } else {
+        ui_stage = 8;
         draw_menu();
     }
+    ui_stage = 0;
     drawn_menu = menu;
     drawn_style = settings.ui_style;
     full_redraw = 0;

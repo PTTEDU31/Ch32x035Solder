@@ -33,5 +33,10 @@ void lcd_pixel(uint16_t x, uint16_t y, uint16_t c);
 void lcd_vline(uint16_t x, uint16_t y, uint16_t h, uint16_t c);
 /* Let the background work run (PD) between small drawing steps. */
 void lcd_yield(void);
+/* Streamed drawing: open a window, push w*h pixels row by row (sent by
+ * DMA through the line buffers), then end. */
+void lcd_begin(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
+void lcd_push(uint16_t c);
+void lcd_end(void);
 
 #endif

@@ -5,4 +5,7 @@
 void ui_init(void);
 void ui_poll(void);
 
+/* Debug: which drawing step is running (to find long non-yielding parts). */
+extern volatile unsigned char ui_stage;
+
 #endif

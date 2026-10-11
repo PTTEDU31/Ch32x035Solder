@@ -64,6 +64,8 @@ static int16_t deep_c = 150;
 static uint8_t fast_wake_en = 1;
 static uint32_t wake_until;
 static volatile uint8_t wake_req;
+static uint8_t wake_volts;
+#define WAKE_V_MIN_GAP_C 60
 
 static void set_state(heater_state_t s)
 {
@@ -269,9 +271,11 @@ static void control(void)
         hold_cycles = 0;
     }
 
-    /* End fast wake at the setpoint. */
+    /* End fast wake at the setpoint. The higher voltage is kept until then
+     * too, so there is only one renegotiation back. */
     if (waking && (err < 5 || (int32_t)(millis() - wake_until) >= 0)) {
         wake_until = 0;
+        wake_volts = 0;
     }
 
     st.target_c = tgt;
@@ -400,7 +404,7 @@ void heater_poll(void)
             go_no_tip();
             break;
         }
-        pd_request(tip_mv(st.tip, boost_until != 0 || wake_until != 0), st.tip->r_mohm);
+        pd_request(tip_mv(st.tip, boost_until != 0 || wake_volts), st.tip->r_mohm);
         if (contract_ok(st.tip)) {
             sense_clear_faults();
             apply_permit(st.tip, 1);
@@ -428,7 +432,7 @@ void heater_poll(void)
             break;
         }
         apply_permit(st.tip, 1);
-        pd_request(tip_mv(st.tip, boost_until != 0 || wake_until != 0), st.tip->r_mohm);
+        pd_request(tip_mv(st.tip, boost_until != 0 || wake_volts), st.tip->r_mohm);
         if (STAND() && st.state == HS_RUN && !wake_req) {
             set_state(HS_SLEEP);
             stand_since = now;
@@ -437,6 +441,9 @@ void heater_poll(void)
         } else if ((!STAND() || wake_req) && st.state == HS_SLEEP) {
             if (fast_wake_en) {
                 wake_until = (now + WAKE_MAX_S * 1000UL) | 1;
+                /* Higher voltage only when far below the setpoint: changing
+                 * the contract pauses heating (~0.2-1 s). */
+                wake_volts = (target_c - st.temp_c) > WAKE_V_MIN_GAP_C;
             }
             if (wake_req) {
                 stand_since = now; /* knob wake on the stand restarts sleep */

@@ -122,21 +122,36 @@ static void data(uint8_t d)
     spi8(d);
 }
 
+/* Commands while drawing stay in 16-bit SPI mode: the word 0x00cc is sent
+ * with DC low, i.e. NOP (0x00) followed by the command, and the CASET/RASET
+ * parameters are 16-bit values anyway. This avoids switching the SPI frame
+ * size (and waiting for idle) several times per window. */
+static void cmd16(uint8_t c)
+{
+    px_flush();
+    spi_16bit(1);
+    spi_done();
+    GPIO_ResetBits(GPIOA, LCD_DC_PIN);
+    SPI1->DATAR = c;
+    spi_done();
+    GPIO_SetBits(GPIOA, LCD_DC_PIN);
+}
+
+static inline void data16(uint16_t d)
+{
+    spi_wait();
+    SPI1->DATAR = d;
+}
+
 static void window(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 {
-    uint16_t x1 = x + w - 1, y1 = y + h - 1;
-
-    cmd(0x2A);
-    data(x >> 8);
-    data(x & 0xFF);
-    data(x1 >> 8);
-    data(x1 & 0xFF);
-    cmd(0x2B);
-    data(y >> 8);
-    data(y & 0xFF);
-    data(y1 >> 8);
-    data(y1 & 0xFF);
-    cmd(0x2C);
+    cmd16(0x2A);
+    data16(x);
+    data16((uint16_t)(x + w - 1));
+    cmd16(0x2B);
+    data16(y);
+    data16((uint16_t)(y + h - 1));
+    cmd16(0x2C);
 }
 
 /* Pixels always go through the buffer (sent by DMA, 16-bit frames). */
@@ -322,6 +337,21 @@ uint16_t lcd_text(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t b
 void lcd_yield(void)
 {
     yield();
+}
+
+void lcd_begin(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+{
+    window(x, y, w, h);
+}
+
+void lcd_push(uint16_t c)
+{
+    px(c);
+}
+
+void lcd_end(void)
+{
+    spi_done();
 }
 
 uint16_t lcd_mix(uint16_t fg, uint16_t bg, uint8_t a)
@@ -517,5 +547,6 @@ void lcd_round_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t r, u
             }
             lcd_fill(x + inset, yy, w - 2 * inset, 1, color);
         }
+        yield();
     }
 }
