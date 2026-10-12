@@ -370,7 +370,8 @@ uint16_t lcd_mix(uint16_t fg, uint16_t bg, uint8_t a)
     return (uint16_t)((r << 11) | (g << 5) | b);
 }
 
-/* 16-entry palette from bg to fg for 4 bpp glyphs. */
+/* 16-entry palette from bg to fg. The 2 bpp glyphs index it with v * 5
+ * (0, 5, 10, 15), so smoothing can still interpolate between levels. */
 static void palette(uint16_t *pal, uint16_t fg, uint16_t bg)
 {
     for (uint8_t i = 0; i < 16; i++) {
@@ -395,12 +396,14 @@ uint16_t lcd_big(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t bg
             continue;
         }
         {
-            const uint8_t *g = &font_big[idx * (FONT_BIG_W / 2) * FONT_BIG_H];
+            const uint8_t *g = &font_big[idx * (FONT_BIG_W / 4) * FONT_BIG_H];
             window(x, y, FONT_BIG_W, FONT_BIG_H);
-            for (uint16_t i = 0; i < (FONT_BIG_W / 2) * FONT_BIG_H; i++) {
-                px(pal[g[i] >> 4]);
-                px(pal[g[i] & 0x0F]);
-                if (i % ((FONT_BIG_W / 2) * 10) == (FONT_BIG_W / 2) * 10 - 1) {
+            for (uint16_t i = 0; i < (FONT_BIG_W / 4) * FONT_BIG_H; i++) {
+                px(pal[(g[i] >> 6) * 5]);
+                px(pal[((g[i] >> 4) & 3) * 5]);
+                px(pal[((g[i] >> 2) & 3) * 5]);
+                px(pal[(g[i] & 3) * 5]);
+                if (i % ((FONT_BIG_W / 4) * 10) == (FONT_BIG_W / 4) * 10 - 1) {
                     yield(); /* window stays open across the pause */
                 }
             }
@@ -415,7 +418,7 @@ uint16_t lcd_big(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t bg
 uint16_t lcd_big2(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t bg)
 {
     uint16_t pal[16];
-    const uint16_t rb = FONT_BIG_W / 2; /* bytes per glyph row */
+    const uint16_t rb = FONT_BIG_W / 4; /* bytes per glyph row */
 
     palette(pal, fg, bg);
     for (; *s; s++) {
@@ -437,13 +440,14 @@ uint16_t lcd_big2(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t b
                 for (uint8_t rep = 0; rep < 2; rep++) {
                     /* Horizontal 2x with the in-between pixel interpolated
                      * for a smoother edge. */
-                    for (uint16_t i = 0; i < rb; i++) {
-                        uint8_t a = r[i] >> 4, b = r[i] & 0x0F;
-                        uint8_t n = i + 1 < rb ? (r[i + 1] >> 4) : b;
+                    for (uint16_t i = 0; i < FONT_BIG_W; i++) {
+                        uint8_t a = ((r[i >> 2] >> (6 - 2 * (i & 3))) & 3) * 5;
+                        uint8_t n = a;
+                        if (i + 1 < FONT_BIG_W) {
+                            n = ((r[(i + 1) >> 2] >> (6 - 2 * ((i + 1) & 3))) & 3) * 5;
+                        }
                         px(pal[a]);
-                        px(pal[(a + b) >> 1]);
-                        px(pal[b]);
-                        px(pal[(b + n) >> 1]);
+                        px(pal[(a + n) >> 1]);
                     }
                 }
                 if ((row & 3) == 3) {
@@ -490,9 +494,10 @@ uint16_t lcd_mid(uint16_t x, uint16_t y, const char *s, uint16_t fg, uint16_t bg
             break;
         }
         window(x, y, w, FONT_MID_H);
-        for (uint16_t n = 0; n < (uint16_t)(w / 2) * FONT_MID_H; n++) {
-            px(pal[g[n] >> 4]);
-            px(pal[g[n] & 0x0F]);
+        for (uint8_t row = 0; row < FONT_MID_H; row++, g += (w + 3) / 4) {
+            for (uint8_t col = 0; col < w; col++) {
+                px(pal[((g[col >> 2] >> (6 - 2 * (col & 3))) & 3) * 5]);
+            }
         }
         x += w;
         yield();

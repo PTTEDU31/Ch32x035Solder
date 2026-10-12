@@ -8,13 +8,15 @@
 #define FONT_SMALL_FIRST 32
 #define FONT_SMALL_LAST 126
 
-/* Big digits: '0'..'9' then '-', 4 bpp (two pixels per byte, high nibble
- * first), fixed FONT_BIG_W x FONT_BIG_H cells. */
+/* Big digits: '0'..'9' then '-', 2 bpp (four pixels per byte, first pixel in
+ * the high bits, FONT_BIG_W / 4 bytes per row), fixed FONT_BIG_W x
+ * FONT_BIG_H cells. */
 #define FONT_BIG_W 48
 #define FONT_BIG_H 60
 #define FONT_BIG_DASH 10
 
-/* Medium proportional font, 4 bpp: codes 32..127, 127 = degree sign. */
+/* Medium proportional font, 2 bpp (first pixel in the high bits, rows padded
+ * to (w + 3) / 4 bytes): codes 32..127, 127 = degree sign. */
 #define FONT_MID_H 22
 #define FONT_MID_FIRST 32
 #define FONT_MID_LAST 127

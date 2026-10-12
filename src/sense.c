@@ -33,7 +33,7 @@ static uint16_t ma_to_raw(uint32_t ma)
 
 static void off(void)
 {
-    heater_pin(0);
+    heater_pin(HEATER_OFF);
     heater_on = 0;
     on_until = 0;
     if (probing) {
@@ -143,6 +143,14 @@ void sense_tick(void)
      * charged through R1). Over the limit: off at once and latch. */
     if (heater_on && phase >= HEATER_SETTLE_MS + 1) {
         uint16_t c = adc_read(ADC_CH_CURRENT);
+
+        /* The shunt amplifier (R10 499k, C11 100 pF: tau 50 us) averages the
+         * 20 kHz PWM, so it reads (100 - off %) % of the on-state current.
+         * Everything downstream (limits, resistance, power) is in terms of
+         * that current, so scale it back. */
+        if (!probing && HEATER_PWM_OFF_PCT && c > CUR_OFFSET_RAW) {
+            c = (uint16_t)(CUR_OFFSET_RAW + (uint32_t)(c - CUR_OFFSET_RAW) * 100 / (100 - HEATER_PWM_OFF_PCT));
+        }
         if (c > sense.cur_peak) {
             sense.cur_peak = c;
         }
@@ -191,7 +199,7 @@ void sense_tick(void)
                 probe_raw = 0;
                 on_until = HEATER_SETTLE_MS + HEATER_PROBE_MS + 1;
                 heater_on = 1;
-                heater_pin(1);
+                heater_pin(HEATER_SOLID);
             } else {
                 probe_raw = 0;
                 probe_done = 1;
@@ -200,9 +208,11 @@ void sense_tick(void)
             if (on_ms > SENSE_MAX_ON_MS) {
                 on_ms = SENSE_MAX_ON_MS;
             }
-            on_until = HEATER_SETTLE_MS + on_ms;
+            /* Window long enough for on_ms of effective on time (rounded up). */
+            on_until = HEATER_SETTLE_MS +
+                       (uint8_t)(((uint16_t)on_ms * 100 + (99 - HEATER_PWM_OFF_PCT)) / (100 - HEATER_PWM_OFF_PCT));
             heater_on = 1;
-            heater_pin(1);
+            heater_pin(HEATER_PWM);
         }
         sense.on_ms = heater_on ? (uint8_t)(on_until - HEATER_SETTLE_MS) : 0;
     }

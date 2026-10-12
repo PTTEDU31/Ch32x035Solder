@@ -5,8 +5,17 @@
 
 /* Drive the heater gate to its OFF level. Safe to call at any time. */
 void heater_force_off(void);
-/* Gate on/off. Only sense.c (SysTick ISR) may call this with on = 1. */
-void heater_pin(int on);
+/* Gate states for heater_pin(). Only sense.c (SysTick ISR) may call it with
+ * anything but HEATER_OFF. */
+enum { HEATER_OFF = 0, HEATER_SOLID = 1, HEATER_PWM = 2 };
+/* HEATER_SOLID: PB0 is a GPIO held at the ON level (presence probe at 5 V,
+ * where the bootstrap is too weak for 20 kHz edges). HEATER_PWM: PB0 is
+ * handed to TIM1 CH2N (HEATER_PWM_OFF_PCT, same as SOLID without it).
+ * HEATER_OFF: GPIO at the OFF level, whatever the previous state. PWM stays
+ * off until heater_pwm_enable(). */
+void heater_pin(int mode);
+/* Called by out_init() once TIM1 CH2N is configured. */
+void heater_pwm_enable(void);
 
 /* Clocks, heater-off, UART, GPIO inputs, ADC, then the 1 ms SysTick that
  * runs sense_tick(), input_tick() and out_tick(). */

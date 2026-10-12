@@ -45,16 +45,56 @@ uint32_t isr_max_cycles(void)
     return m;
 }
 
-void heater_pin(int on)
+#if HEATER_PWM_OFF_PCT
+_Static_assert(HEATER_ACTIVE_LOW, "heater PWM drives PB0 low = on");
+_Static_assert(HEATER_PIN == GPIO_Pin_0, "heater PWM is TIM1_CH2N on PB0");
+#endif
+
+static volatile uint8_t gate_pwm_ready; /* TIM1 CH2N configured (out_init) */
+static uint8_t gate_af;                 /* PB0 currently belongs to the timer */
+
+static void gate_mode(GPIOMode_TypeDef mode)
 {
+    GPIO_InitTypeDef gpio = {0};
+
+    gpio.GPIO_Pin = HEATER_PIN;
+    gpio.GPIO_Mode = mode;
+    gpio.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(HEATER_PORT, &gpio);
+}
+
+void heater_pwm_enable(void)
+{
+    gate_pwm_ready = 1;
+}
+
+/* The OFF level is always written first and every off path ends in plain
+ * GPIO mode, so no path can leave the timer driving the gate. The mode only
+ * changes at the start and end of an on window (read-modify-write of
+ * GPIOB->CFGLR, nothing else touches PB0..7 configuration at run time). */
+void heater_pin(int mode)
+{
+    if (mode == HEATER_PWM && HEATER_PWM_OFF_PCT && gate_pwm_ready) {
+        if (!gate_af) {
+            gate_af = 1;
+            gate_mode(GPIO_Mode_AF_PP);
+        }
+        return;
+    }
+    if (gate_af) {
+        gate_af = 0;
+        gate_mode(GPIO_Mode_Out_PP);
+    }
+    /* Solid on, or off, as a GPIO; PWM requested before the timer is up
+     * falls back to solid on (as before the PWM existed). */
 #if HEATER_ACTIVE_LOW
-    if (on) {
+    if (mode != HEATER_OFF) {
         GPIO_ResetBits(HEATER_PORT, HEATER_PIN);
     } else {
         GPIO_SetBits(HEATER_PORT, HEATER_PIN);
     }
 #else
-    if (on) {
+    if (mode != HEATER_OFF) {
         GPIO_SetBits(HEATER_PORT, HEATER_PIN);
     } else {
         GPIO_ResetBits(HEATER_PORT, HEATER_PIN);
@@ -67,7 +107,7 @@ void heater_force_off(void)
     GPIO_InitTypeDef gpio = {0};
 
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB, ENABLE);
-    heater_pin(0);
+    heater_pin(HEATER_OFF);
     gpio.GPIO_Pin = HEATER_PIN;
     gpio.GPIO_Mode = GPIO_Mode_Out_PP;
     gpio.GPIO_Speed = GPIO_Speed_50MHz;

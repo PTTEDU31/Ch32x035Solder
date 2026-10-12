@@ -141,6 +141,15 @@
  * within the source current. */
 #define SOFTSTART_STEP_MS 20
 #define HEATER_PROBE_MS 2    /* presence probe pulse */
+/* Heater gate PWM (TIM1_CH2N on PB0, same timer and frequency as the
+ * backlight: BLK_HZ). Inside an on window the gate is switched off for
+ * HEATER_PWM_OFF_PCT % of every period, so C1 is recharged through the SS54
+ * ~20000 times a second instead of in audible 1 ms gaps. The presence probe
+ * (5 V) stays a solid pulse. 0 = no PWM, solid on-window. Each edge costs
+ * switching loss in Q5 (gate charged through R1 = 330 ohm, discharged by
+ * Q2): check Q5 temperature at low voltage first, and lower BLK_HZ (it
+ * also sets the backlight frequency) if it runs hot. */
+#define HEATER_PWM_OFF_PCT 10
 
 /* ---- USB-PD -------------------------------------------------------------- */
 /* The board has external 5.1k Rd on CC1/CC2 (R12/R13), needed so a charger

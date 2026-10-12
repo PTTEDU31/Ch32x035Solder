@@ -66,7 +66,10 @@ void sense_clear_faults(void);
 void sense_probe_start(void);
 int sense_probe_done(uint16_t *cur_raw);
 
-/* Max on time per cycle in ms. */
-#define SENSE_MAX_ON_MS (HEATER_PERIOD_MS - HEATER_SETTLE_MS - 2)
+/* Max on time per cycle in ms. With heater PWM the gate is off for
+ * HEATER_PWM_OFF_PCT % of the window, which sense.c lengthens to make up
+ * for it, so the on time requested is the effective one. */
+#define SENSE_MAX_WINDOW_MS (HEATER_PERIOD_MS - HEATER_SETTLE_MS - 2)
+#define SENSE_MAX_ON_MS (SENSE_MAX_WINDOW_MS * (100 - HEATER_PWM_OFF_PCT) / 100)
 
 #endif

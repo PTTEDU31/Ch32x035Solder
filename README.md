@@ -124,8 +124,9 @@ auto-off), and a power bar with %, W (from measured current) and V_IN.
 | LCD SPI1 | 16-bit DMA (DMA1 ch3): fills repeat one word, glyphs go through two 480-pixel line buffers |
 | UART log USART1 | DMA (DMA1 ch4) from a 1 KB ring buffer; printf never blocks, overflow is dropped and counted. On by default (`-DSTATUS_UART=0` to disable) |
 | TIM1 CH1 | backlight PWM 20 kHz (PB9) |
+| TIM1 CH2N | heater gate PWM 20 kHz (PB0, TIM1 remap 1), only while the heater is on; `HEATER_PWM_OFF_PCT` |
 | TIM3 CH2 | buzzer 2.7 kHz (PB5, remap 1; PB1 bonded on the same pin is an input) |
-| Heater | GPIO from the 1 ms ISR, 200 ms cycle with a 25 ms off window for the TEMP sample |
+| Heater | 1 ms ISR decides on/off (200 ms cycle, 25 ms off window for TEMP); during the on window PB0 is driven by TIM1 CH2N at 20 kHz, the 5 V probe is a solid pulse |
 
 The status line reports `isr=` (longest SysTick ISR, us),
 `gap=` (longest time between two runs of the PD/heater background, ms; must
@@ -140,9 +141,11 @@ heater off.
 
 - The bootstrap needs an off phase before every on phase. The firmware
   cycle is 100 ms with at least 5 ms off (TEMP sample), and the heater is
-  off while idle, so C1 is always charged. No fast PWM is needed; higher
-  frequencies only add switching loss in Q5 (slow gate through R1) and
-  zener dissipation.
+  off while idle, so C1 is always charged. Inside an on window the gate is
+  refreshed by a 20 kHz PWM (`HEATER_PWM_OFF_PCT` % off per period) instead
+  of 1 ms gaps, which were audible. Each edge costs switching loss in Q5
+  and zener dissipation: not yet checked on the board (scope PB0, gate and
+  P+; check that Q5 really turns off in the off part and stays cool).
 - With H_PWM low but C1 never charged (no prior off phase) Q5 only
   half-conducts: tip ~= V_IN - Vgs(th), ~1.3 V at 5 V. This is what is seen
   when the MCU is in reset and PB0 floats.
